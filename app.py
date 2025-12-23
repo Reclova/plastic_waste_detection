@@ -227,7 +227,6 @@ elif mode == "🎥 Upload Video":
                 st.info("💡 Tip: Untuk video besar, coba gunakan resolusi lebih rendah atau coba mode gambar terlebih dahulu")
 
 
-# ============== WEBRTC DETECTION ==============
 elif mode == "📷 Real-time WebRTC":
     st.header("Real-time Detection (WebRTC)")
     
@@ -236,9 +235,16 @@ elif mode == "📷 Real-time WebRTC":
         "Pastikan browser Anda mengizinkan akses ke webcam."
     )
     
-    # RTC Configuration
+    # RTC Configuration dengan multiple STUN servers
     rtc_configuration = RTCConfiguration(
-        {"iceServers": [{"urls": ["stun:stun1.l.google.com:19302"]}]}
+        {
+            "iceServers": [
+                {"urls": ["stun:stun1.l.google.com:19302"]},
+                {"urls": ["stun:stun2.l.google.com:19302"]},
+                {"urls": ["stun:stun3.l.google.com:19302"]},
+                {"urls": ["stun:stun4.l.google.com:19302"]},
+            ]
+        }
     )
     
     class VideoProcessor:
