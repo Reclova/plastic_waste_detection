@@ -4,6 +4,8 @@ import numpy as np
 from ultralytics import YOLO
 from pathlib import Path
 import tempfile
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+import av
 
 # Page Configuration
 st.set_page_config(
@@ -257,66 +259,36 @@ elif mode == "🎥 Upload Video":
 
 
 elif mode == "📷 Real-time Webcam":
-    st.header("Real-time Detection")
-    
-    col1, col2 = st.columns([3, 1])
+    st.header("Real-time Detection (WebRTC)")
 
-    with col1:
-        FRAME_WINDOW = st.image([])
-    
-    with col2:
-        st.subheader("📊 Stats")
-        fps_placeholder = st.empty()
-        detection_placeholder = st.empty()
-
-    start_button = st.button(
-        "▶️ Start Webcam",
-        key="start_webcam",
-        use_container_width=True
+    st.info(
+        "ℹ️ Mode ini menggunakan WebRTC melalui browser. "
+        "Jika kamera tidak muncul di Streamlit Cloud, silakan gunakan demo lokal."
     )
 
-    cap = cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        st.error("❌ Webcam tidak dapat diakses. Pastikan device terhubung.")
-    else:
-        if start_button:
-            frame_count = 0
-            import time
-            
-            stop_button = st.button(
-                "⏹️ Stop Webcam",
-                key="stop_webcam",
-                use_container_width=True
+    class VideoProcessor(VideoTransformerBase):
+        def __init__(self):
+            self.frame_count = 0
+
+        def transform(self, frame):
+            img = frame.to_ndarray(format="bgr24")
+
+            results = model(
+                img,
+                conf=conf_threshold,
+                iou=iou_threshold,
+                device=device_value,
+                verbose=False
             )
 
-            placeholder_stop = st.empty()
-            
-            while True:
-                ret, frame = cap.read()
-                
-                if not ret:
-                    st.warning("⚠️ Gagal membaca frame dari webcam")
-                    break
+            annotated = results[0].plot()
+            self.frame_count += 1
 
-                # Run Detection
-                start_time = time.time()
-                results = model(frame, conf=conf_threshold, iou=iou_threshold, device=device_value)
-                annotated = results[0].plot()
-                inference_time = time.time() - start_time
-                fps = 1 / inference_time if inference_time > 0 else 0
+            return av.VideoFrame.from_ndarray(annotated, format="bgr24")
 
-                # Update Display
-                FRAME_WINDOW.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
-                
-                fps_placeholder.metric("FPS", f"{fps:.1f}")
-                detection_placeholder.metric("Deteksi", len(results[0].boxes))
-
-                frame_count += 1
-
-                # Check for stop button
-                if placeholder_stop.button("⏹️ Stop", key=f"stop_{frame_count}"):
-                    break
-
-        cap.release()
-        st.info("Webcam ditutup")
+    webrtc_streamer(
+        key="realtime-detection",
+        video_processor_factory=VideoProcessor,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )

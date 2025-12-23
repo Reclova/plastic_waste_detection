@@ -1,6 +1,7 @@
 streamlit
+streamlit-webrtc
 ultralytics
-opencv-python-headless
 numpy
 Pillow
-torch
+av
+opencv-python-headless==4.9.0.80
