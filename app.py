@@ -1,10 +1,10 @@
 import streamlit as st
-import cv2
 import numpy as np
 from ultralytics import YOLO
 from pathlib import Path
 import tempfile
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+from PIL import Image
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 import av
 
 # Page Configuration
@@ -80,9 +80,10 @@ device_value = 0 if device == "0 (GPU)" else "cpu"
 st.sidebar.header("📋 Mode Deteksi")
 mode = st.sidebar.radio(
     "Pilih Mode",
-    ("🖼️ Upload Gambar", "🎥 Upload Video", "📷 Real-time Webcam")
+    ("🖼️ Upload Gambar", "🎥 Upload Video", "📷 Real-time WebRTC")
 )
 
+# ============== IMAGE DETECTION ==============
 if mode == "🖼️ Upload Gambar":
     st.header("Deteksi Gambar")
     
@@ -92,33 +93,27 @@ if mode == "🖼️ Upload Gambar":
     )
 
     if uploaded_image is not None:
-        # Read Image
-        image_bytes = uploaded_image.read()
-        image = cv2.imdecode(
-            np.frombuffer(image_bytes, np.uint8),
-            cv2.IMREAD_COLOR
-        )
+        # Read Image using PIL
+        image = Image.open(uploaded_image).convert("RGB")
+        image_array = np.array(image)
 
         # Run Detection
-        results = model(image, conf=conf_threshold, iou=iou_threshold, device=device_value)
-        annotated = results[0].plot()
+        results = model(image_array, conf=conf_threshold, iou=iou_threshold, device=device_value)
+        
+        # Get annotated image
+        annotated_array = results[0].plot()
+        annotated_image = Image.fromarray(annotated_array)
 
         # Display Results
         col1, col2 = st.columns(2)
 
         with col1:
             st.subheader("📸 Gambar Original")
-            st.image(
-                cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-                use_container_width=True
-            )
+            st.image(image, use_container_width=True)
 
         with col2:
             st.subheader("🎯 Hasil Deteksi")
-            st.image(
-                cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                use_container_width=True
-            )
+            st.image(annotated_image, use_container_width=True)
 
         # Display Statistics
         st.divider()
@@ -137,7 +132,7 @@ if mode == "🖼️ Upload Gambar":
                 st.metric("Avg Confidence", "N/A")
         
         with col3:
-            st.metric("Image Size", f"{image.shape[1]}x{image.shape[0]}")
+            st.metric("Image Size", f"{image_array.shape[1]}x{image_array.shape[0]}")
         
         with col4:
             st.metric("Conf Threshold", f"{conf_threshold:.2f}")
@@ -161,6 +156,7 @@ if mode == "🖼️ Upload Gambar":
             st.dataframe(detection_data, use_container_width=True, hide_index=True)
 
 
+# ============== VIDEO DETECTION ==============
 elif mode == "🎥 Upload Video":
     st.header("Deteksi Video")
     
@@ -170,6 +166,8 @@ elif mode == "🎥 Upload Video":
     )
 
     if uploaded_video is not None:
+        st.warning("⚠️ Video processing pada Streamlit Cloud terbatas. Untuk video besar, gunakan lokal atau gunakan mode gambar.")
+        
         col1, col2 = st.columns(2)
 
         with col1:
@@ -179,100 +177,79 @@ elif mode == "🎥 Upload Video":
         with col2:
             st.subheader("⚙️ Processing")
             progress_placeholder = st.empty()
-            status_placeholder = st.empty()
             
-            # Save uploaded video
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-                tmp_file.write(uploaded_video.getbuffer())
-                video_path = tmp_file.name
-
             try:
-                # Open Video
-                cap = cv2.VideoCapture(video_path)
-                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                # Save uploaded video
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+                    tmp_file.write(uploaded_video.getbuffer())
+                    video_path = tmp_file.name
 
-                # Create Output Video dengan codec H.264
-                output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-                fourcc = cv2.VideoWriter_fourcc(*'H264')
-                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-                frame_count = 0
+                # Use ultralytics result.save() untuk hasil video
+                results = model.predict(
+                    video_path,
+                    conf=conf_threshold,
+                    iou=iou_threshold,
+                    device=device_value,
+                    save=True,
+                    verbose=False
+                )
                 
-                with status_placeholder.container():
-                    st.info(f"Total Frames: {total_frames} | FPS: {fps:.2f}")
-
-                # Process Frames
-                frames_data = []
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-
-                    # Run Detection
-                    results = model(frame, conf=conf_threshold, iou=iou_threshold, device=device_value)
-                    annotated = results[0].plot()
-                    frames_data.append(annotated)
-                    out.write(annotated)
-
-                    frame_count += 1
-                    progress = frame_count / total_frames
-                    progress_placeholder.progress(progress, f"Processing: {frame_count}/{total_frames} frames")
-
-                cap.release()
-                out.release()
-
-                # Ensure file is properly closed
-                import time
-                time.sleep(1)
-
-                # Verify file exists and has content
-                if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
-                    status_placeholder.success(f"✅ Video processed successfully!")
-
-                    # Display Output Video
-                    st.subheader("🎯 Hasil Deteksi Video")
-                    with open(output_path, 'rb') as f:
-                        video_bytes = f.read()
-                        st.video(video_bytes)
-
-                    # Download Button
-                    st.download_button(
-                        label="⬇️ Download Hasil Video",
-                        data=video_bytes,
-                        file_name="detected_video.mp4",
-                        mime="video/mp4"
-                    )
+                # Find output video
+                output_base = Path("runs/detect")
+                if output_base.exists():
+                    # Cari folder terbaru
+                    folders = sorted(output_base.glob("predict*"), key=lambda x: x.stat().st_mtime, reverse=True)
+                    if folders:
+                        output_video = folders[0] / Path(video_path).name
+                        if output_video.exists():
+                            progress_placeholder.success("✅ Video processed successfully!")
+                            
+                            with open(output_video, 'rb') as f:
+                                video_bytes = f.read()
+                                st.subheader("🎯 Hasil Deteksi Video")
+                                st.video(video_bytes)
+                                
+                                st.download_button(
+                                    label="⬇️ Download Hasil Video",
+                                    data=video_bytes,
+                                    file_name="detected_video.mp4",
+                                    mime="video/mp4"
+                                )
+                        else:
+                            st.error("❌ Gagal menemukan video output")
+                    else:
+                        st.error("❌ Gagal memproses video")
                 else:
-                    st.error("❌ Gagal membuat video output. File kosong atau tidak valid.")
+                    st.error("❌ Output directory tidak ditemukan")
                     
             except Exception as e:
-                status_placeholder.error(f"❌ Error processing video: {str(e)}")
-                st.error(f"Detail error: {str(e)}")
-            finally:
-                if cap.isOpened():
-                    cap.release()
-                if out.isOpened():
-                    out.release()
+                st.error(f"❌ Error processing video: {str(e)}")
+                st.info("💡 Tip: Untuk video besar, coba gunakan resolusi lebih rendah atau coba mode gambar terlebih dahulu")
 
 
-elif mode == "📷 Real-time Webcam":
+# ============== WEBRTC DETECTION ==============
+elif mode == "📷 Real-time WebRTC":
     st.header("Real-time Detection (WebRTC)")
-
+    
     st.info(
-        "ℹ️ Mode ini menggunakan WebRTC melalui browser. "
-        "Jika kamera tidak muncul di Streamlit Cloud, silakan gunakan demo lokal."
+        "ℹ️ Mode ini menggunakan WebRTC untuk streaming real-time dari webcam Anda.\n"
+        "Pastikan browser Anda mengizinkan akses ke webcam."
     )
-
-    class VideoProcessor(VideoTransformerBase):
+    
+    # RTC Configuration
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun1.l.google.com:19302"]}]}
+    )
+    
+    class VideoProcessor:
         def __init__(self):
             self.frame_count = 0
-
-        def transform(self, frame):
+            self.total_detections = 0
+        
+        def recv(self, frame):
             img = frame.to_ndarray(format="bgr24")
-
+            
+            # Run detection
             results = model(
                 img,
                 conf=conf_threshold,
@@ -280,15 +257,36 @@ elif mode == "📷 Real-time Webcam":
                 device=device_value,
                 verbose=False
             )
-
+            
+            # Plot results
             annotated = results[0].plot()
+            detections = results[0].boxes
+            
             self.frame_count += 1
-
+            self.total_detections += len(detections)
+            
             return av.VideoFrame.from_ndarray(annotated, format="bgr24")
-
-    webrtc_streamer(
-        key="realtime-detection",
-        video_processor_factory=VideoProcessor,
+    
+    # WebRTC Streamer
+    webrtc_ctx = webrtc_streamer(
+        key="plastic-detection-webrtc",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=rtc_configuration,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
+        video_processor_factory=VideoProcessor,
     )
+    
+    # Display stats
+    if webrtc_ctx.state.playing:
+        st.info("🎥 Kamera aktif - Deteksi sedang berjalan")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Status", "🟢 Aktif")
+        with col2:
+            st.metric("Confidence", f"{conf_threshold:.2f}")
+        with col3:
+            st.metric("IOU Threshold", f"{iou_threshold:.2f}")
+    else:
+        st.warning("⏸️ Tekan tombol 'Start' di atas untuk memulai deteksi")
